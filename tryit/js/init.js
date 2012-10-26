@@ -210,7 +210,7 @@ $(document).ready(function(){
       'uri': sip_uri,
       'display_name': '',
       'password':  sip_password,
-      'register_expires': 120,
+      'register_expires': 600,
       'secure_transport': false,
       'stun_server': 'aliax.net',
       'trace_sip': true,
