@@ -1,45 +1,39 @@
 window.GUI = {
 
   phoneCallButtonPressed : function() {
-    var uri;
+    var target = phone_dialed_number_screen.val();
 
-    if (!(uri = phone_dialed_number_screen.val())) {
-      return false;
+    if (target) {
+      phone_dialed_number_screen.val("");
+      GUI.jssipCall(target);
     }
-
-    phone_dialed_number_screen.val("");
-
-    call = GUI.jssipCall(uri);
   },
 
 
   phoneChatButtonPressed : function() {
-    var user, uri, session;
+    var user, session,
+      uri = phone_dialed_number_screen.val();
 
-    if (!(uri = phone_dialed_number_screen.val())) {
-      return false;
-    }
-
-    uri = JsSIP.utils.normalizeUri(uri, MyPhone.configuration.domain);
     if (uri) {
-      user = JsSIP.grammar.parse(uri, 'SIP_URI').user;
-    } else {
-      alert('Invalid target');
-      return;
+      uri = JsSIP.utils.normalizeUri(uri, MyPhone.configuration.domain);
+      if (uri) {
+        user = JsSIP.grammar.parse(uri, 'SIP_URI').user;
+      } else {
+        alert('Invalid target');
+        return;
+      }
+
+      phone_dialed_number_screen.val("");
+      session = GUI.getSession(uri);
+
+      // If this is a new session create it without call.
+      if (!session) {
+        session = GUI.createSession(user, uri);
+        GUI.setCallSessionStatus(session, "inactive");
+      }
+
+      $(session).find(".chat input").focus();
     }
-
-    phone_dialed_number_screen.val("");
-
-    session = GUI.getSession(uri);
-
-    // If this is a new session create it without call.
-    if (!session) {
-      session = GUI.createSession(user, uri);
-      GUI.setCallSessionStatus(session, "inactive");
-    }
-    // If it exists, do nothing.
-
-    $(session).find(".chat input").focus();
   },
 
 
@@ -47,100 +41,67 @@ window.GUI = {
    * JsSIP.UA new_session event listener
    */
   new_session : function(e) {
-    var session, call, message, display_name, uri;
-    message = e.data.request;
-    call = e.data.session;
-    uri = call.remote_identity;
-    session = GUI.getSession(uri);
+    var
+      request = e.data.request,
+      call = e.data.session,
+      uri = call.remote_identity,
+      session = GUI.getSession(uri),
+      display_name = (call.direction === 'incoming') ? request.s('from').user : JsSIP.grammar.parse(request.ruri, 'SIP_URI').user,
+      status = (call.direction === 'incoming') ? "incoming" : "trying";
 
-    if (call.direction === 'incoming') {
-      display_name = message.s('from').user;
-
-      // If this is a new session create it with call status "incoming".
-      if (!session) {
-        session = GUI.createSession(display_name, uri);
-        session.call = call;
-        GUI.setCallSessionStatus(session, "incoming");
-      }
-      // If the session already exists but has no call, start it and set to "incoming".
-      else if ($(session).find(".call").hasClass("inactive")) {
-        session.call = call;
-        GUI.setCallSessionStatus(session, "incoming");
-      }
-      // If the session exists with active callreject it.
-      else {
-        call.terminate();
-        return false;
-      }
-    } else {
-      display_name = message.ruri;
-
-      // If this is a new session create it with call status "trying".
-      if (!session) {
-        session = GUI.createSession(display_name, uri);
-        session.call = call;
-        GUI.setCallSessionStatus(session, "trying");
-      }
-      // If the session already exists but has no call, start it and set to "trying".
-      else if ($(session).find(".call").hasClass("inactive")) {
-        session.call = call;
-        GUI.setCallSessionStatus(session, "trying");
-      }
-      // If the session exists just associate the call to it.
-      else {
-        session.call = call;
-        GUI.setCallSessionStatus(session, "trying");
-      }
+    // If the session exists with active call reject it.
+    if (session && !$(session).find(".call").hasClass("inactive")) {
+      call.terminate();
+      return false;
     }
 
-    session.call.on('failed',function(e) {
-      var cause, response;
+    // If this is a new session create it
+    if (!session) {
+      session = GUI.createSession(display_name, uri);
+    }
 
-      cause = e.data.cause;
+    // Associate the JsSIP Session to the HTML div session
+    session.call = call;
+    GUI.setCallSessionStatus(session, status);
+    $(session).find(".chat input").focus();
 
-      if (e.data.originator === 'remote') {
-        cause = e.data.cause;
-        document.title = PageTitle;
-        if (cause && cause.match("SIP;cause=200", "i")) {
-          GUI.setCallSessionStatus(session, "answered_elsewhere");
-          GUI.removeSession(session, 1500);
-        }
-        else {
-          GUI.setCallSessionStatus(session, "terminated", cause);
-          GUI.removeSession(session, 1000);
-        }
-      } else {
-        response = e.data.response;
-        GUI.setCallSessionStatus(session, 'terminated', cause);
-        soundPlayer.setAttribute("src", "sounds/outgoing-call-rejected.wav");
-        soundPlayer.play();
-        GUI.removeSession(session, 500);
-      }
-    });
-    session.call.on('ended', function(e) {
-      var cause = e.data.cause;
-      switch (cause) {
-        default:
-          (function(){
-            document.title = PageTitle;
-            GUI.setCallSessionStatus(session, "terminated", cause);
-            GUI.removeSession(session, 1500);
-          })();
-          break;
-      }
-    });
+    // EVENT CALLBACK DEFINITION
 
-    call.on('started',function(e){
-        GUI.setCallSessionStatus(session, 'answered');
-    });
-
+    // Progress
     call.on('progress',function(e){
       if (e.data.originator === 'remote') {
         GUI.setCallSessionStatus(session, 'in-progress');
       }
     });
 
-    $(session).find(".chat input").focus();
+    // Started
+    call.on('started',function(e){
+      GUI.setCallSessionStatus(session, 'answered');
+    });
+
+    // Failed
+    call.on('failed',function(e) {
+      var
+        cause = e.data.cause,
+        response = e.data.response;
+
+      if (e.data.originator === 'remote' && cause.match("SIP;cause=200", "i")) {
+        cause = 'answered_elsewhere';
+      }
+
+      GUI.setCallSessionStatus(session, 'terminated', cause);
+      soundPlayer.setAttribute("src", "sounds/outgoing-call-rejected.wav");
+      soundPlayer.play();
+      GUI.removeSession(session, 1500);
+    });
+
+    // Ended
+    call.on('ended', function(e) {
+      var cause = e.data.cause;
+
+      GUI.setCallSessionStatus(session, "terminated", cause);
+      GUI.removeSession(session, 1500);
+    });
   },
 
 
@@ -148,14 +109,15 @@ window.GUI = {
    * JsSIP.UA new_message event listener
    */
   new_message : function(e) {
-    var display_name, uri, text, session, request;
-    message = e.data.message;
-    uri = message.remote_identity;
-    session = GUI.getSession(uri);
+    var display_name, text,
+      message = e.data.message,
+      request = e.data.request,
+      uri = message.remote_identity,
+      session = GUI.getSession(uri);
 
     if (message.direction === 'incoming') {
-      display_name = e.data.request.s('from').user;
-      text = e.data.request.body;
+      display_name = request.s('from').user;
+      text = request.body;
 
       // If this is a new session create it with call status "inactive", and add the message.
       if (!session) {
@@ -166,8 +128,7 @@ window.GUI = {
       GUI.addChatMessage(session, "peer", text);
       $(session).find(".chat input").focus();
     } else {
-      display_name = e.data.request.ruri;
-      message.on('succeeded', function(e){ });
+      display_name = request.ruri;
       message.on('failed', function(e){
         var response = e.data.response;
         GUI.addChatMessage(session, "error", response.status_code.toString() + " " + response.reason_phrase);
@@ -356,7 +317,7 @@ window.GUI = {
         status_text.text("");
 
         button_dial.click(function() {
-          session.call = GUI.jssipCall(uri);
+          GUI.jssipCall(uri);
         });
         break;
 
@@ -401,7 +362,6 @@ window.GUI = {
         soundPlayer.play();
 
         button_dial.click(function() {
-          document.title = PageTitle;
           var selfView = document.getElementById('selfView');
           var remoteView = document.getElementById('remoteView');
           session.call.answer(selfView, remoteView);
